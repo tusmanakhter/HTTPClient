@@ -19,12 +19,12 @@ def output_response(response_headers, response_body, verbose, output_file=None):
 
 
 def run_get(url, verbose, headers=None, output_file=None):
-    response_headers, response_body = httpclient.http_get(url, headers)
+    response_headers, response_body = httpclient.http_request("get", url, headers)
     output_response(response_headers, response_body, verbose, output_file)
 
 
 def run_post(url, verbose, headers=None, data=None, file=None, output_file=None):
-    response_headers, response_body = httpclient.http_post(url, headers, data, file)
+    response_headers, response_body = httpclient.http_request("post", url, headers, data, file)
     output_response(response_headers, response_body, verbose, output_file)
 
 
