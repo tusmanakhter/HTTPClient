@@ -43,7 +43,7 @@ def get_status_code(response):
 
 def get_redirect_url(response):
     try:
-        redirect_url = re.search('Location: (.*)', response).group(1)
+        redirect_url = re.search('Location: (.*)', response).group(1).strip('\r')
     except AttributeError:
         return None
     return redirect_url
