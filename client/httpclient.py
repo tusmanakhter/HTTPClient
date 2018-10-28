@@ -4,7 +4,14 @@ from urllib.parse import urlparse
 
 
 def get_host(url):
-    return urlparse(url).netloc
+    return urlparse(url).hostname
+
+
+def get_port(url):
+    port = urlparse(url).port
+    if not port:
+        return 80
+    return int(port)
 
 
 def get_path(url):
@@ -62,10 +69,11 @@ def http_request(request_type, url, headers=None, data=None, file=None):
         url = '%s%s' % ('//', url)
     conn = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     host = get_host(url)
+    port = get_port(url)
     path = get_path(url)
     query = get_query(url)
     try:
-        conn.connect((host, 80))
+        conn.connect((host, port))
         request_string = ""
         if request_type == "get":
             request_string = build_http_get(host, path, query, headers)
@@ -84,7 +92,11 @@ def http_request(request_type, url, headers=None, data=None, file=None):
         except UnicodeDecodeError:
             response = response.decode("iso-8859-1")
         input_headers = headers
-        (headers, body) = response.split("\r\n\r\n")
+        try:
+            (headers, body) = response.split("\r\n\r\n")
+        except ValueError:
+            headers = response.split("\r\n\r\n")[0]
+            body = ""
         status_code, status_code_message = get_status_code(response)
         if 300 <= int(status_code) <= 304:
             (headers, body) = check_and_handle_redirect(request_type, response, headers, body, input_headers, data, file)
