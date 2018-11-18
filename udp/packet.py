@@ -9,6 +9,12 @@ class Packet:
     Packet represents a simulated UDP packet.
     """
 
+    DATA = 0
+    SYN = 1
+    SYN_ACK = 2
+    ACK = 3
+    NAK = 4
+
     def __init__(self, packet_type, seq_num, peer_ip_addr, peer_port, payload):
         self.packet_type = int(packet_type)
         self.seq_num = int(seq_num)
