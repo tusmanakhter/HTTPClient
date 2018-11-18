@@ -4,6 +4,7 @@ import socket
 import threading
 import os
 import mimetypes
+import random
 from packet import Packet
 from datetime import datetime
 
@@ -92,10 +93,10 @@ def run_server(port, directory):
 
 def send_syn_ack(conn, recv_packet, sender):
     packet = Packet(packet_type=Packet.SYN_ACK,
-                    seq_num=200,
+                    seq_num=random.randint(1, 2147483647),
                     peer_ip_addr=recv_packet.peer_ip_addr,
                     peer_port=recv_packet.peer_port,
-                    payload='')
+                    payload=str(recv_packet.seq_num + 1).encode("utf-8"))
     conn.sendto(packet.to_bytes(), sender)
 
 

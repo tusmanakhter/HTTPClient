@@ -3,6 +3,7 @@ sys.path.insert(0, '../')
 import socket
 import re
 import ipaddress
+import random
 from urllib.parse import urlparse
 from packet import Packet
 
@@ -70,12 +71,14 @@ def check_and_handle_redirect(request_type, response, headers, body, input_heade
 
 def send_syn(conn, router_host, router_port, ip, port):
     print("3-Way Handshake Started\nSending SYN")
+    seq_number = random.randint(1, 2147483647)
     packet = Packet(packet_type=Packet.SYN,
-                    seq_num=100,
+                    seq_num=seq_number,
                     peer_ip_addr=ip,
                     peer_port=port,
                     payload='')
     conn.sendto(packet.to_bytes(), (router_host, router_port))
+    return seq_number
 
 
 def send_ack(conn, recv_packet, router_host, router_port):
@@ -97,28 +100,40 @@ def send_data(conn, request, router_host, router_port, ip, port):
     print('Send "{}" to router'.format(request))
 
 
+def check_piggyback_seq(seq_number, recv_packet):
+    received_seq = int(recv_packet.payload.decode("utf-8"))
+    if received_seq == seq_number:
+        return True
+    else:
+        return False
+
+
 def http_request(request_type, url, router_host, router_port, headers=None, data=None, file=None):
     if '//' not in url:
         url = '%s%s' % ('//', url)
     timeout = 5
     conn = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    conn.settimeout(timeout)
     host = get_host(url)
     port = get_port(url)
     path = get_path(url)
     query = get_query(url)
     ip = ipaddress.ip_address(socket.gethostbyname(host))
 
-    # Send SYN
-    send_syn(conn, router_host, router_port, ip, port)
-
-    # Receive SYN-ACK
-    print("Waiting for SYN-ACK")
-    conn.settimeout(timeout)
     packet_type = -1
-    while packet_type != Packet.SYN_ACK:
-        response, sender = conn.recvfrom(1024)
-        recv_packet = Packet.from_bytes(response)
-        packet_type = recv_packet.packet_type
+    correct_seq = True
+    while packet_type != Packet.SYN_ACK or not correct_seq:
+        # Send SYN
+        seq_number = send_syn(conn, router_host, router_port, ip, port)
+        try:
+            # Receive SYN-ACK
+            print("Waiting for SYN-ACK")
+            response, sender = conn.recvfrom(1024)
+            recv_packet = Packet.from_bytes(response)
+            packet_type = recv_packet.packet_type
+            correct_seq = check_piggyback_seq(seq_number + 1, recv_packet)
+        except socket.timeout:
+            pass
 
     print("Received SYN-ACK")
     # Send ACK
@@ -137,7 +152,6 @@ def http_request(request_type, url, router_host, router_port, headers=None, data
         send_data(conn, request, router_host, router_port, ip, port)
 
         # Try to receive a response within timeout
-        conn.settimeout(timeout)
         print('Waiting for a response')
         response, sender = conn.recvfrom(1024)
         packet = Packet.from_bytes(response)
