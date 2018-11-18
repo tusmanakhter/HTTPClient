@@ -1,6 +1,8 @@
 import socket
 import re
+import ipaddress
 from urllib.parse import urlparse
+from packet import Packet
 
 
 def get_host(url):
@@ -64,33 +66,44 @@ def check_and_handle_redirect(request_type, response, headers, body, input_heade
     return headers, body
 
 
-def http_request(request_type, url, headers=None, data=None, file=None):
+def http_request(request_type, url, router_host, router_port, headers=None, data=None, file=None):
     if '//' not in url:
         url = '%s%s' % ('//', url)
-    conn = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    timeout = 5
+    conn = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     host = get_host(url)
     port = get_port(url)
     path = get_path(url)
     query = get_query(url)
+    ip = ipaddress.ip_address(socket.gethostbyname(host))
     try:
-        conn.connect((host, port))
         request_string = ""
         if request_type == "get":
             request_string = build_http_get(host, path, query, headers)
         elif request_type == "post":
             request_string = build_http_post(host, path, headers, data, file)
         request = request_string.encode("utf-8")
-        conn.sendall(request)
-        response = b''
-        while True:
-            packet = conn.recv(len(request))
-            if not packet:
-                break
-            response += packet
+        packet = Packet(packet_type=0,
+                        seq_num=1,
+                        peer_ip_addr=ip,
+                        peer_port=port,
+                        payload=request)
+        conn.sendto(packet.to_bytes(), (router_host, router_port))
+        print('Send "{}" to router'.format(request))
+
+        # Try to receive a response within timeout
+        conn.settimeout(timeout)
+        print('Waiting for a response')
+        response, sender = conn.recvfrom(1024)
+        packet = Packet.from_bytes(response)
+        print('Router: ', sender)
+        print('Packet: ', packet)
         try:
-            response = response.decode("utf-8")
+            response = packet.payload.decode("utf-8")
+            print('Payload: ' + response)
         except UnicodeDecodeError:
-            response = response.decode("iso-8859-1")
+            response = packet.payload.decode("iso-8859-1")
+            print('Payload: ' + response)
         input_headers = headers
         try:
             (headers, body) = response.split("\r\n\r\n")

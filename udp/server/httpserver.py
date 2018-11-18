@@ -2,6 +2,7 @@ import socket
 import threading
 import os
 import mimetypes
+from packet import Packet
 from datetime import datetime
 
 
@@ -75,26 +76,27 @@ def split_request(line):
 
 
 def run_server(port, directory):
-    host = ""
-    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-
+    conn = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
-        listener.bind((host, port))
-        listener.listen(1)
+        conn.bind(('', port))
         print('Server listening on port', port)
         while True:
-            conn, addr = listener.accept()
-            threading.Thread(target=handle_client, args=(conn, addr, directory)).start()
+            data, sender = conn.recvfrom(1024)
+            handle_client(conn, data, sender, directory)
     finally:
-        listener.close()
+        print("false")
+        conn.close()
 
 
-def handle_client(conn, addr, directory):
-    print('New client from', addr)
+def handle_client(conn, data, sender, directory):
+    print('New client from', str(sender[0]) + ":" + str(sender[1]))
     try:
+        recv_packet = Packet.from_bytes(data)
+        print("Router: ", sender)
+        print("Packet: ", recv_packet)
+        print("Payload: ", recv_packet.payload.decode("utf-8"))
         request = b''
-        packet = conn.recv(1024)
-        request += packet
+        request += recv_packet.payload
         request = request.decode().split('\r\n\r\n')
         headers = request[0]
         body = request[1]
@@ -105,9 +107,14 @@ def handle_client(conn, addr, directory):
             response_string = build_http_get(path, directory)
         elif request_type == "POST":
             response_string = build_http_post(path, directory, body)
-        conn.sendall(response_string)
-    finally:
-        conn.close()
+        packet = Packet(packet_type=0,
+                        seq_num=1,
+                        peer_ip_addr=recv_packet.peer_ip_addr,
+                        peer_port=recv_packet.peer_port,
+                        payload=response_string)
+        conn.sendto(packet.to_bytes(), sender)
+    except Exception as e:
+        print("Error: ", e)
 
 
 def build_http_get(path, directory):

@@ -18,13 +18,13 @@ def output_response(response_headers, response_body, verbose, output_file=None):
             print(response_body)
 
 
-def run_get(url, verbose, headers=None, output_file=None):
-    response_headers, response_body = httpclient.http_request("get", url, headers)
+def run_get(url, router_host, router_port, verbose, headers=None, output_file=None):
+    response_headers, response_body = httpclient.http_request("get", url, router_host, router_port, headers)
     output_response(response_headers, response_body, verbose, output_file)
 
 
-def run_post(url, verbose, headers=None, data=None, file=None, output_file=None):
-    response_headers, response_body = httpclient.http_request("post", url, headers, data, file)
+def run_post(url, router_host, router_port, verbose, headers=None, data=None, file=None, output_file=None):
+    response_headers, response_body = httpclient.http_request("post", url, router_host, router_port, headers, data, file)
     output_response(response_headers, response_body, verbose, output_file)
 
 
@@ -34,6 +34,12 @@ subparsers = parser.add_subparsers(help='available HTTP requests', dest='command
 
 # Common args for both subparsers
 parent_parser = argparse.ArgumentParser(add_help=False)
+parent_parser.add_argument("-rh", "--routerhost",
+                           help="Host for router", default="localhost",
+                           metavar='router_host')
+parent_parser.add_argument("-rp", "--routerport",
+                           help="Port for router", default=3000,
+                           metavar='router_port')
 parent_parser.add_argument("-v", "--verbose",
                            help="Prints the detail of the response such as protocol, status, and headers.",
                            action='store_true',)
@@ -65,6 +71,8 @@ group.add_argument("-f", help="Associates the content of a file to the body HTTP
                          metavar='file')
 
 args = parser.parse_args()
+router_host = args.routerhost
+router_port = args.routerport
 verbose = args.verbose
 headers = args.k
 output_file = args.o
@@ -74,8 +82,8 @@ if headers:
     headers = headers.split(' ')
 
 if args.command == "get":
-    run_get(url, verbose, headers, output_file)
+    run_get(url, router_host, router_port, verbose, headers, output_file)
 elif args.command == "post":
     data = args.d
     file = args.f
-    run_post(url, verbose, headers, data, file, output_file)
+    run_post(url, router_host, router_port, verbose, headers, data, file, output_file)
