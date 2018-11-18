@@ -90,31 +90,51 @@ def run_server(port, directory):
 
 def handle_client(conn, data, sender, directory):
     print('New client from', str(sender[0]) + ":" + str(sender[1]))
-    try:
-        recv_packet = Packet.from_bytes(data)
-        print("Router: ", sender)
-        print("Packet: ", recv_packet)
-        print("Payload: ", recv_packet.payload.decode("utf-8"))
-        request = b''
-        request += recv_packet.payload
-        request = request.decode().split('\r\n\r\n')
-        headers = request[0]
-        body = request[1]
-        header_lines = headers.split('\r\n')
-        request_line = header_lines[0]
-        request_type, path, protocol = split_request(request_line)
-        if request_type == "GET":
-            response_string = build_http_get(path, directory)
-        elif request_type == "POST":
-            response_string = build_http_post(path, directory, body)
-        packet = Packet(packet_type=0,
-                        seq_num=1,
+
+    # Receive SYN
+    recv_packet = Packet.from_bytes(data)
+    if recv_packet.packet_type == 1:
+        print("Received SYN")
+
+        # Send SYN-ACK
+        packet = Packet(packet_type=2,
+                        seq_num=200,
                         peer_ip_addr=recv_packet.peer_ip_addr,
                         peer_port=recv_packet.peer_port,
-                        payload=response_string)
+                        payload='')
         conn.sendto(packet.to_bytes(), sender)
-    except Exception as e:
-        print("Error: ", e)
+
+    # Receive ACK
+    response, sender = conn.recvfrom(1024)
+    recv_packet = Packet.from_bytes(response)
+    if recv_packet.packet_type == 3:
+        response, sender = conn.recvfrom(1024)
+        print("Received ACK")
+        try:
+            recv_packet = Packet.from_bytes(response)
+            print("Router: ", sender)
+            print("Packet: ", recv_packet)
+            print("Payload: ", recv_packet.payload.decode("utf-8"))
+            request = b''
+            request += recv_packet.payload
+            request = request.decode().split('\r\n\r\n')
+            headers = request[0]
+            body = request[1]
+            header_lines = headers.split('\r\n')
+            request_line = header_lines[0]
+            request_type, path, protocol = split_request(request_line)
+            if request_type == "GET":
+                response_string = build_http_get(path, directory)
+            elif request_type == "POST":
+                response_string = build_http_post(path, directory, body)
+            packet = Packet(packet_type=1,
+                            seq_num=recv_packet.seq_num + 1,
+                            peer_ip_addr=recv_packet.peer_ip_addr,
+                            peer_port=recv_packet.peer_port,
+                            payload=response_string)
+            conn.sendto(packet.to_bytes(), sender)
+        except Exception as e:
+            print("Error: ", e)
 
 
 def build_http_get(path, directory):

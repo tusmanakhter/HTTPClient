@@ -76,46 +76,68 @@ def http_request(request_type, url, router_host, router_port, headers=None, data
     path = get_path(url)
     query = get_query(url)
     ip = ipaddress.ip_address(socket.gethostbyname(host))
-    try:
-        request_string = ""
-        if request_type == "get":
-            request_string = build_http_get(host, path, query, headers)
-        elif request_type == "post":
-            request_string = build_http_post(host, path, headers, data, file)
-        request = request_string.encode("utf-8")
-        packet = Packet(packet_type=0,
-                        seq_num=1,
-                        peer_ip_addr=ip,
-                        peer_port=port,
-                        payload=request)
-        conn.sendto(packet.to_bytes(), (router_host, router_port))
-        print('Send "{}" to router'.format(request))
 
-        # Try to receive a response within timeout
-        conn.settimeout(timeout)
-        print('Waiting for a response')
-        response, sender = conn.recvfrom(1024)
-        packet = Packet.from_bytes(response)
-        print('Router: ', sender)
-        print('Packet: ', packet)
+    # Send SYN
+    packet = Packet(packet_type=1,
+                    seq_num=100,
+                    peer_ip_addr=ip,
+                    peer_port=port,
+                    payload='')
+    conn.sendto(packet.to_bytes(), (router_host, router_port))
+    response, sender = conn.recvfrom(1024)
+    recv_packet = Packet.from_bytes(response)
+
+    # Receive SYN-ACK
+    if recv_packet.packet_type == 2:
+        print("Received SYN-ACK")
+        # Send ACK
+        packet = Packet(packet_type=3,
+                        seq_num=recv_packet.seq_num + 1,
+                        peer_ip_addr=recv_packet.peer_ip_addr,
+                        peer_port=recv_packet.peer_port,
+                        payload='')
+        conn.sendto(packet.to_bytes(), (router_host, router_port))
+
         try:
-            response = packet.payload.decode("utf-8")
-            print('Payload: ' + response)
-        except UnicodeDecodeError:
-            response = packet.payload.decode("iso-8859-1")
-            print('Payload: ' + response)
-        input_headers = headers
-        try:
-            (headers, body) = response.split("\r\n\r\n")
-        except ValueError:
-            headers = response.split("\r\n\r\n")[0]
-            body = ""
-        status_code, status_code_message = get_status_code(response)
-        if 300 <= int(status_code) <= 304:
-            (headers, body) = check_and_handle_redirect(request_type, response, headers, body, input_headers, data, file)
-        return headers, body
-    finally:
-        conn.close()
+            request_string = ""
+            if request_type == "get":
+                request_string = build_http_get(host, path, query, headers)
+            elif request_type == "post":
+                request_string = build_http_post(host, path, headers, data, file)
+            request = request_string.encode("utf-8")
+            packet = Packet(packet_type=0,
+                            seq_num=1,
+                            peer_ip_addr=ip,
+                            peer_port=port,
+                            payload=request)
+            conn.sendto(packet.to_bytes(), (router_host, router_port))
+            print('Send "{}" to router'.format(request))
+
+            # Try to receive a response within timeout
+            conn.settimeout(timeout)
+            print('Waiting for a response')
+            response, sender = conn.recvfrom(1024)
+            packet = Packet.from_bytes(response)
+            print('Router: ', sender)
+            print('Packet: ', packet)
+            try:
+                response = packet.payload.decode("utf-8")
+                print('Payload: ' + response)
+            except UnicodeDecodeError:
+                response = packet.payload.decode("iso-8859-1")
+                print('Payload: ' + response)
+            input_headers = headers
+            try:
+                (headers, body) = response.split("\r\n\r\n")
+            except ValueError:
+                headers = response.split("\r\n\r\n")[0]
+                body = ""
+            status_code, status_code_message = get_status_code(response)
+            if 300 <= int(status_code) <= 304:
+                (headers, body) = check_and_handle_redirect(request_type, response, headers, body, input_headers, data, file)
+            return headers, body
+        finally:
+            conn.close()
 
 
 def build_http_get(host, path, query=None, headers=None):
