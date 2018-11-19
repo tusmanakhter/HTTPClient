@@ -1,12 +1,21 @@
 import sys
 sys.path.insert(0, '../')
 import socket
-import threading
 import os
 import mimetypes
 import random
 from packet import Packet
 from datetime import datetime
+
+seq_number = -1
+client_seq_number = -1
+
+
+class SynError(Exception):
+    pass
+
+
+syn_error = SynError()
 
 
 def create_headers(response_code, content_type=None, content_disposition=None):
@@ -83,17 +92,17 @@ def run_server(port, directory):
     try:
         conn.bind(('', port))
         print('Server listening on port', port)
-        while True:
-            data, sender = conn.recvfrom(1024)
-            handle_client(conn, data, sender, directory)
+        handle_client(conn, directory)
     finally:
         print("false")
         conn.close()
 
 
 def send_syn_ack(conn, recv_packet, sender):
+    global seq_number
+    seq_number = random.randint(1, 2147483647)
     packet = Packet(packet_type=Packet.SYN_ACK,
-                    seq_num=random.randint(1, 2147483647),
+                    seq_num=seq_number,
                     peer_ip_addr=recv_packet.peer_ip_addr,
                     peer_port=recv_packet.peer_port,
                     payload=str(recv_packet.seq_num + 1).encode("utf-8"))
@@ -101,52 +110,113 @@ def send_syn_ack(conn, recv_packet, sender):
 
 
 def send_data(conn, response, recv_packet, sender):
+    global seq_number
     packet = Packet(packet_type=Packet.DATA,
-                    seq_num=recv_packet.seq_num + 1,
+                    seq_num=seq_number,
                     peer_ip_addr=recv_packet.peer_ip_addr,
                     peer_port=recv_packet.peer_port,
                     payload=response)
     conn.sendto(packet.to_bytes(), sender)
 
 
-def handle_client(conn, data, sender, directory):
-    print('New client from', str(sender[0]) + ":" + str(sender[1]))
+def check_ack_seq(received_seq):
+    global seq_number
+    print("ack")
+    print(seq_number)
+    print(received_seq)
+    if received_seq == seq_number:
+        return True
+    else:
+        return False
 
-    # Receive SYN
-    recv_packet = Packet.from_bytes(data)
 
-    if recv_packet.packet_type == Packet.SYN:
-        print("Received SYN")
-        # Send SYN-ACK
-        print("Sending SYN_ACK")
-        send_syn_ack(conn, recv_packet, sender)
+def check_client_seq(received_seq):
+    global client_seq_number
+    print("client")
+    print(client_seq_number)
+    print(received_seq)
+    if received_seq == client_seq_number:
+        return True
+    else:
+        return False
 
-    # Receive ACK
-    response, sender = conn.recvfrom(1024)
-    recv_packet = Packet.from_bytes(response)
-    if recv_packet.packet_type == Packet.ACK:
-        response, sender = conn.recvfrom(1024)
-        print("Received ACK\n3-Way Handshake Finished")
+
+def build_response(recv_packet, directory):
+    request = b''
+    request += recv_packet.payload
+    request = request.decode().split('\r\n\r\n')
+    headers = request[0]
+    body = request[1]
+    header_lines = headers.split('\r\n')
+    request_line = header_lines[0]
+    request_type, path, protocol = split_request(request_line)
+    if request_type == "GET":
+        response_string = build_http_get(path, directory)
+    elif request_type == "POST":
+        response_string = build_http_post(path, directory, body)
+    return response_string
+
+
+def handle_client(conn, directory):
+    global seq_number
+    global client_seq_number
+    while True:
+        data, sender = conn.recvfrom(1024)
+        print('New client from', str(sender[0]) + ":" + str(sender[1]))
+
+        # Receive SYN
+        recv_packet = Packet.from_bytes(data)
+
+        if recv_packet.packet_type == Packet.SYN:
+            print("Received SYN")
+            client_seq_number = recv_packet.seq_num
+            # Send SYN-ACK
+            print("Sending SYN_ACK")
+            send_syn_ack(conn, recv_packet, sender)
+        else:
+            continue
+
+        packet_type = -1
+        correct_seq = False
+
+        seq_number += 1
+
+        client_seq_number += 1
         try:
-            recv_packet = Packet.from_bytes(response)
-            print("Router: ", sender)
-            print("Packet: ", recv_packet)
-            print("Payload: ", recv_packet.payload.decode("utf-8"))
-            request = b''
-            request += recv_packet.payload
-            request = request.decode().split('\r\n\r\n')
-            headers = request[0]
-            body = request[1]
-            header_lines = headers.split('\r\n')
-            request_line = header_lines[0]
-            request_type, path, protocol = split_request(request_line)
-            if request_type == "GET":
-                response_string = build_http_get(path, directory)
-            elif request_type == "POST":
-                response_string = build_http_post(path, directory, body)
-            send_data(conn, response_string, recv_packet, sender)
-        except Exception as e:
-            print("Error: ", e)
+            while packet_type != Packet.ACK or not correct_seq:
+                # Receive ACK
+                response, sender = conn.recvfrom(1024)
+                recv_packet = Packet.from_bytes(response)
+                packet_type = recv_packet.packet_type
+                correct_seq = check_ack_seq(recv_packet.seq_num)
+                if packet_type == Packet.SYN:
+                    raise syn_error
+        except SynError:
+            continue
+
+        print("Received ACK\n3-Way Handshake Finished")
+        packet_type = Packet.DATA
+        correct_seq = False
+        client_seq_number += 1
+
+        try:
+            while packet_type == Packet.DATA or not correct_seq:
+                response, sender = conn.recvfrom(1024)
+                try:
+                    recv_packet = Packet.from_bytes(response)
+                    print("Router: ", sender)
+                    print("Packet: ", recv_packet)
+                    print("Payload: ", recv_packet.payload.decode("utf-8"))
+                    correct_seq = check_client_seq(recv_packet.seq_num)
+                    packet_type = recv_packet.packet_type
+                    if packet_type == Packet.SYN:
+                        raise syn_error
+                    response_string = build_response(recv_packet, directory)
+                    send_data(conn, response_string, recv_packet, sender)
+                except Exception as e:
+                    print("Error: ", e)
+        except SynError:
+            continue
 
 
 def build_http_get(path, directory):
