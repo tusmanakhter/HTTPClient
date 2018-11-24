@@ -64,14 +64,6 @@ def get_redirect_url(response):
     return redirect_url
 
 
-def check_and_handle_redirect(request_type, response, headers, body, input_headers=None, data=None, file=None):
-    redirect_url = get_redirect_url(response)
-    if not redirect_url:
-        return headers, body
-    headers, body = http_request(request_type, redirect_url, input_headers, data, file)
-    return headers, body
-
-
 def send_syn(conn, router_host, router_port, ip, port):
     global seq_number
     print("3-Way Handshake Started\nSending SYN")
@@ -108,10 +100,8 @@ def send_data(conn, request, router_host, router_port, ip, port):
 def check_piggyback_seq(recv_packet):
     global seq_number
     received_seq = int(recv_packet.payload.decode("utf-8"))
-    print("piggy")
-    print(seq_number)
-    print(received_seq)
-    if received_seq == seq_number:
+    print("piggy: " + str(seq_number+1) + "///" + str(received_seq))
+    if received_seq == seq_number + 1:
         return True
     else:
         return False
@@ -119,9 +109,7 @@ def check_piggyback_seq(recv_packet):
 
 def check_server_seq(received_seq):
     global server_seq_number
-    print("server")
-    print(received_seq)
-    print(server_seq_number)
+    print("server: " + str(received_seq+1) + "///" + str(server_seq_number))
     if received_seq == server_seq_number:
         return True
     else:
@@ -147,7 +135,6 @@ def http_request(request_type, url, router_host, router_port, headers=None, data
 
     # Send SYN
     send_syn(conn, router_host, router_port, ip, port)
-    seq_number += 1
 
     while packet_type != Packet.SYN_ACK or not correct_seq:
         try:
@@ -157,11 +144,9 @@ def http_request(request_type, url, router_host, router_port, headers=None, data
             recv_packet = Packet.from_bytes(response)
             packet_type = recv_packet.packet_type
             correct_seq = check_piggyback_seq(recv_packet)
-            print(packet_type)
         except socket.timeout:
             # Send SYN
             send_syn(conn, router_host, router_port, ip, port)
-            seq_number += 1
 
     server_seq_number = recv_packet.seq_num
     server_seq_number += 1
@@ -178,8 +163,8 @@ def http_request(request_type, url, router_host, router_port, headers=None, data
             request_string = build_http_post(host, path, headers, data, file)
         request = request_string.encode("utf-8")
 
-        seq_number += 1
         # Send the data
+        seq_number += 1
         send_data(conn, request, router_host, router_port, ip, port)
 
         packet_type = -1
@@ -206,22 +191,17 @@ def http_request(request_type, url, router_host, router_port, headers=None, data
                 except UnicodeDecodeError:
                     response = packet.payload.decode("iso-8859-1")
                     print('Payload: ' + response)
-                input_headers = headers
                 try:
                     (headers, body) = response.split("\r\n\r\n")
                 except ValueError:
                     headers = response.split("\r\n\r\n")[0]
                     body = ""
-                status_code, status_code_message = get_status_code(response)
-                if 300 <= int(status_code) <= 304:
-                    (headers, body) = check_and_handle_redirect(request_type, response, headers, body, input_headers, data, file)
                 return headers, body
             except socket.timeout:
                 # Send ACK
                 send_ack(conn, recv_packet, router_host, router_port)
                 # Send the data
                 send_data(conn, request, router_host, router_port, ip, port)
-
     finally:
         conn.close()
 

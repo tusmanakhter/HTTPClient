@@ -121,10 +121,8 @@ def send_data(conn, response, recv_packet, sender):
 
 def check_ack_seq(received_seq):
     global seq_number
-    print("ack")
-    print(seq_number)
-    print(received_seq)
-    if received_seq == seq_number:
+    print("ack: " + str(seq_number+1) + "///" + str(received_seq))
+    if received_seq == seq_number + 1:
         return True
     else:
         return False
@@ -132,9 +130,7 @@ def check_ack_seq(received_seq):
 
 def check_client_seq(received_seq):
     global client_seq_number
-    print("client")
-    print(client_seq_number)
-    print(received_seq)
+    print("client: " + str(client_seq_number) + "///" + str(received_seq))
     if received_seq == client_seq_number:
         return True
     else:
@@ -179,9 +175,6 @@ def handle_client(conn, directory):
         packet_type = -1
         correct_seq = False
 
-        seq_number += 1
-
-        client_seq_number += 1
         try:
             while packet_type != Packet.ACK or not correct_seq:
                 # Receive ACK
@@ -198,23 +191,21 @@ def handle_client(conn, directory):
         packet_type = Packet.DATA
         correct_seq = False
         client_seq_number += 1
+        seq_number += 1
 
         try:
             while packet_type == Packet.DATA or not correct_seq:
                 response, sender = conn.recvfrom(1024)
-                try:
-                    recv_packet = Packet.from_bytes(response)
-                    print("Router: ", sender)
-                    print("Packet: ", recv_packet)
-                    print("Payload: ", recv_packet.payload.decode("utf-8"))
-                    correct_seq = check_client_seq(recv_packet.seq_num)
-                    packet_type = recv_packet.packet_type
-                    if packet_type == Packet.SYN:
-                        raise syn_error
-                    response_string = build_response(recv_packet, directory)
-                    send_data(conn, response_string, recv_packet, sender)
-                except Exception as e:
-                    print("Error: ", e)
+                recv_packet = Packet.from_bytes(response)
+                print("Router: ", sender)
+                print("Packet: ", recv_packet)
+                print("Payload: ", recv_packet.payload.decode("utf-8"))
+                correct_seq = check_client_seq(recv_packet.seq_num)
+                packet_type = recv_packet.packet_type
+                if packet_type == Packet.SYN:
+                    raise syn_error
+                response_string = build_response(recv_packet, directory)
+                send_data(conn, response_string, recv_packet, sender)
         except SynError:
             continue
 
