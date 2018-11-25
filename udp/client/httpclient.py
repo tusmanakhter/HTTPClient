@@ -66,7 +66,7 @@ def get_redirect_url(response):
 
 def send_syn(conn, router_host, router_port, ip, port):
     global seq_number
-    print("3-Way Handshake Started\nSending SYN")
+    print("3-Way Connection Handshake Started\nSending SYN")
     seq_number = random.randint(1, 2147483647)
     packet = Packet(packet_type=Packet.SYN,
                     seq_num=seq_number,
@@ -86,6 +86,16 @@ def send_ack(conn, recv_packet, router_host, router_port):
     conn.sendto(packet.to_bytes(), (router_host, router_port))
 
 
+def send_fin(conn, recv_packet, router_host, router_port):
+    global seq_number
+    packet = Packet(packet_type=Packet.DATA,
+                    seq_num=seq_number,
+                    peer_ip_addr=recv_packet.peer_ip_addr,
+                    peer_port=recv_packet.peer_port,
+                    payload='FIN'.encode("utf-8"))
+    conn.sendto(packet.to_bytes(), (router_host, router_port))
+
+
 def send_data(conn, request, router_host, router_port, ip, port):
     global seq_number
     packet = Packet(packet_type=Packet.DATA,
@@ -94,13 +104,19 @@ def send_data(conn, request, router_host, router_port, ip, port):
                     peer_port=port,
                     payload=request)
     conn.sendto(packet.to_bytes(), (router_host, router_port))
-    print('Send "{}" to router'.format(request))
 
 
 def check_piggyback_seq(recv_packet):
     global seq_number
     received_seq = int(recv_packet.payload.decode("utf-8"))
-    print("piggy: " + str(seq_number+1) + "///" + str(received_seq))
+    if received_seq == seq_number + 1:
+        return True
+    else:
+        return False
+
+
+def check_ack_seq(received_seq):
+    global seq_number
     if received_seq == seq_number + 1:
         return True
     else:
@@ -109,11 +125,20 @@ def check_piggyback_seq(recv_packet):
 
 def check_server_seq(received_seq):
     global server_seq_number
-    print("server: " + str(received_seq+1) + "///" + str(server_seq_number))
     if received_seq == server_seq_number:
         return True
     else:
         return False
+
+
+def increase_frame():
+    global seq_number
+    seq_number += 1
+
+
+def increase_expected_frame():
+    global server_seq_number
+    server_seq_number += 1
 
 
 def http_request(request_type, url, router_host, router_port, headers=None, data=None, file=None):
@@ -149,7 +174,7 @@ def http_request(request_type, url, router_host, router_port, headers=None, data
             send_syn(conn, router_host, router_port, ip, port)
 
     server_seq_number = recv_packet.seq_num
-    server_seq_number += 1
+    increase_expected_frame()
     print("Received SYN-ACK")
     # Send ACK
     print("Sending ACK")
@@ -164,7 +189,7 @@ def http_request(request_type, url, router_host, router_port, headers=None, data
         request = request_string.encode("utf-8")
 
         # Send the data
-        seq_number += 1
+        increase_frame()
         send_data(conn, request, router_host, router_port, ip, port)
 
         packet_type = -1
@@ -172,36 +197,59 @@ def http_request(request_type, url, router_host, router_port, headers=None, data
 
         # Try to receive a response within timeout
         while packet_type != Packet.DATA or not correct_seq:
-            if packet_type == Packet.SYN_ACK:
-                print("Received SYN-ACK")
-                # Send ACK
-                print("Sending ACK")
-                send_ack(conn, recv_packet, router_host, router_port)
             try:
                 print('Waiting for a response')
                 response, sender = conn.recvfrom(1024)
-                packet = Packet.from_bytes(response)
-                packet_type = packet.packet_type
-                correct_seq = check_server_seq(packet.seq_num)
-                print('Router: ', sender)
-                print('Packet: ', packet)
-                try:
-                    response = packet.payload.decode("utf-8")
-                    print('Payload: ' + response)
-                except UnicodeDecodeError:
-                    response = packet.payload.decode("iso-8859-1")
-                    print('Payload: ' + response)
+                recv_packet = Packet.from_bytes(response)
+                packet_type = recv_packet.packet_type
+                correct_seq = check_server_seq(recv_packet.seq_num)
+                response = recv_packet.payload.decode("utf-8")
                 try:
                     (headers, body) = response.split("\r\n\r\n")
                 except ValueError:
                     headers = response.split("\r\n\r\n")[0]
                     body = ""
-                return headers, body
             except socket.timeout:
-                # Send ACK
                 send_ack(conn, recv_packet, router_host, router_port)
-                # Send the data
                 send_data(conn, request, router_host, router_port, ip, port)
+        print('Received response, 3-Way Termination Handshake Started')
+        increase_frame()
+        while True:
+            print('Waiting for FIN ACK')
+            try:
+                send_fin(conn, recv_packet, router_host, router_port)
+                response, sender = conn.recvfrom(1024)
+                recv_packet = Packet.from_bytes(response)
+                packet_type = recv_packet.packet_type
+                if packet_type == Packet.ACK:
+                    correct_seq = check_ack_seq(recv_packet.seq_num)
+                    if correct_seq:
+                        break
+            except socket.timeout:
+                continue
+        print('Received FIN ACK')
+        received_fin = False
+        increase_expected_frame()
+        increase_expected_frame()
+        conn.settimeout(10)
+        while True:
+            print('Waiting for FIN')
+            try:
+                response, sender = conn.recvfrom(1024)
+                recv_packet = Packet.from_bytes(response)
+                packet_type = recv_packet.packet_type
+                correct_seq = check_server_seq(recv_packet.seq_num+1)
+                if packet_type == Packet.DATA and correct_seq:
+                    if recv_packet.payload.decode("utf-8") == 'FIN':
+                        print('Received FIN, sending ACK')
+                        received_fin = True
+                        send_ack(conn, recv_packet, router_host, router_port)
+            except socket.timeout:
+                if received_fin:
+                    break
+                continue
+        print('Waiting enough time to close connection, here is the data ...\n')
+        return headers, body
     finally:
         conn.close()
 

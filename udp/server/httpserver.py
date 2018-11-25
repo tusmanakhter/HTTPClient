@@ -119,9 +119,28 @@ def send_data(conn, response, recv_packet, sender):
     conn.sendto(packet.to_bytes(), sender)
 
 
+def send_ack(conn, recv_packet, sender):
+    global client_seq_number
+    packet = Packet(packet_type=Packet.ACK,
+                    seq_num=client_seq_number,
+                    peer_ip_addr=recv_packet.peer_ip_addr,
+                    peer_port=recv_packet.peer_port,
+                    payload='')
+    conn.sendto(packet.to_bytes(), sender)
+
+
+def send_fin(conn, recv_packet, sender):
+    global seq_number
+    packet = Packet(packet_type=Packet.DATA,
+                    seq_num=seq_number,
+                    peer_ip_addr=recv_packet.peer_ip_addr,
+                    peer_port=recv_packet.peer_port,
+                    payload='FIN'.encode("utf-8"))
+    conn.sendto(packet.to_bytes(), sender)
+
+
 def check_ack_seq(received_seq):
     global seq_number
-    print("ack: " + str(seq_number+1) + "///" + str(received_seq))
     if received_seq == seq_number + 1:
         return True
     else:
@@ -130,11 +149,20 @@ def check_ack_seq(received_seq):
 
 def check_client_seq(received_seq):
     global client_seq_number
-    print("client: " + str(client_seq_number) + "///" + str(received_seq))
     if received_seq == client_seq_number:
         return True
     else:
         return False
+
+
+def increase_frame():
+    global seq_number
+    seq_number += 1
+
+
+def increase_expected_frame():
+    global client_seq_number
+    client_seq_number += 1
 
 
 def build_response(recv_packet, directory):
@@ -187,27 +215,42 @@ def handle_client(conn, directory):
         except SynError:
             continue
 
-        print("Received ACK\n3-Way Handshake Finished")
-        packet_type = Packet.DATA
-        correct_seq = False
-        client_seq_number += 1
-        seq_number += 1
-
-        try:
-            while packet_type == Packet.DATA or not correct_seq:
+        print("Received ACK\n3-Way Connection Handshake Finished")
+        increase_expected_frame()
+        increase_frame()
+        while True:
+            print("Waiting for data")
+            response, sender = conn.recvfrom(1024)
+            recv_packet = Packet.from_bytes(response)
+            packet_type = recv_packet.packet_type
+            correct_seq = check_client_seq(recv_packet.seq_num)
+            correct_fin_seq = check_client_seq(recv_packet.seq_num - 1)
+            if packet_type == Packet.DATA and (correct_seq or correct_fin_seq):
+                if recv_packet.payload.decode("utf-8") == 'FIN' and correct_fin_seq:
+                    print('Done receiving data, Received FIN')
+                    increase_expected_frame()
+                    increase_expected_frame()
+                    break
+                elif correct_seq:
+                    response_string = build_response(recv_packet, directory)
+                    send_data(conn, response_string, recv_packet, sender)
+        conn.settimeout(1)
+        increase_frame()
+        while True:
+            print('Sending FIN ACK and FIN')
+            try:
+                send_ack(conn, recv_packet, sender)
+                send_fin(conn, recv_packet, sender)
                 response, sender = conn.recvfrom(1024)
                 recv_packet = Packet.from_bytes(response)
-                print("Router: ", sender)
-                print("Packet: ", recv_packet)
-                print("Payload: ", recv_packet.payload.decode("utf-8"))
-                correct_seq = check_client_seq(recv_packet.seq_num)
                 packet_type = recv_packet.packet_type
-                if packet_type == Packet.SYN:
-                    raise syn_error
-                response_string = build_response(recv_packet, directory)
-                send_data(conn, response_string, recv_packet, sender)
-        except SynError:
-            continue
+                correct_seq = check_ack_seq(recv_packet.seq_num)
+                if packet_type == Packet.ACK and correct_seq:
+                    conn.settimeout(None)
+                    break
+            except socket.timeout:
+                continue
+        print('Received ACK, Client Done')
 
 
 def build_http_get(path, directory):
@@ -231,7 +274,7 @@ def build_http_get(path, directory):
         except FileNotFoundError:
             response_header = create_headers(404)
             response_data = 'This file does not exist\r\n'
-    response = (response_header + response_data).encode()
+    response = (response_header + response_data).encode("utf-8")
     return response
 
 
@@ -257,5 +300,5 @@ def build_http_post(path, directory, data):
             except FileNotFoundError:
                 response_header = create_headers(404)
                 response_data = "This directory does not exist on the server.\r\n"
-    response = (response_header + response_data).encode()
+    response = (response_header + response_data).encode("utf-8")
     return response
