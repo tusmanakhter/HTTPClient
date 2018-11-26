@@ -4,11 +4,9 @@ import socket
 import os
 import mimetypes
 import random
+import threading
 from packet import Packet
 from datetime import datetime
-
-seq_number = -1
-client_seq_number = -1
 
 
 class SynError(Exception):
@@ -87,19 +85,7 @@ def split_request(line):
     return request_type, path, protocol
 
 
-def run_server(port, directory):
-    conn = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    try:
-        conn.bind(('', port))
-        print('Server listening on port', port)
-        handle_client(conn, directory)
-    finally:
-        print("false")
-        conn.close()
-
-
 def send_syn_ack(conn, recv_packet, sender):
-    global seq_number
     seq_number = random.randint(1, 2147483647)
     packet = Packet(packet_type=Packet.SYN_ACK,
                     seq_num=seq_number,
@@ -107,10 +93,10 @@ def send_syn_ack(conn, recv_packet, sender):
                     peer_port=recv_packet.peer_port,
                     payload=str(recv_packet.seq_num + 1).encode("utf-8"))
     conn.sendto(packet.to_bytes(), sender)
+    return seq_number
 
 
-def send_data(conn, response, recv_packet, sender):
-    global seq_number
+def send_data(conn, response, recv_packet, sender, seq_number):
     packet = Packet(packet_type=Packet.DATA,
                     seq_num=seq_number,
                     peer_ip_addr=recv_packet.peer_ip_addr,
@@ -119,8 +105,7 @@ def send_data(conn, response, recv_packet, sender):
     conn.sendto(packet.to_bytes(), sender)
 
 
-def send_ack(conn, recv_packet, sender):
-    global client_seq_number
+def send_ack(conn, recv_packet, sender, client_seq_number):
     packet = Packet(packet_type=Packet.ACK,
                     seq_num=client_seq_number,
                     peer_ip_addr=recv_packet.peer_ip_addr,
@@ -129,8 +114,7 @@ def send_ack(conn, recv_packet, sender):
     conn.sendto(packet.to_bytes(), sender)
 
 
-def send_fin(conn, recv_packet, sender):
-    global seq_number
+def send_fin(conn, recv_packet, sender, seq_number):
     packet = Packet(packet_type=Packet.DATA,
                     seq_num=seq_number,
                     peer_ip_addr=recv_packet.peer_ip_addr,
@@ -139,30 +123,28 @@ def send_fin(conn, recv_packet, sender):
     conn.sendto(packet.to_bytes(), sender)
 
 
-def check_ack_seq(received_seq):
-    global seq_number
+def check_ack_seq(received_seq, seq_number):
     if received_seq == seq_number + 1:
         return True
     else:
         return False
 
 
-def check_client_seq(received_seq):
-    global client_seq_number
+def check_client_seq(received_seq, client_seq_number):
     if received_seq == client_seq_number:
         return True
     else:
         return False
 
 
-def increase_frame():
-    global seq_number
+def increase_frame(seq_number):
     seq_number += 1
+    return seq_number
 
 
-def increase_expected_frame():
-    global client_seq_number
+def increase_expected_frame(client_seq_number):
     client_seq_number += 1
+    return client_seq_number
 
 
 def build_response(recv_packet, directory):
@@ -181,76 +163,89 @@ def build_response(recv_packet, directory):
     return response_string
 
 
-def handle_client(conn, directory):
-    global seq_number
-    global client_seq_number
-    while True:
-        data, sender = conn.recvfrom(1024)
-        print('New client from', str(sender[0]) + ":" + str(sender[1]))
-
-        # Receive SYN
-        recv_packet = Packet.from_bytes(data)
-
-        if recv_packet.packet_type == Packet.SYN:
-            print("Received SYN")
-            client_seq_number = recv_packet.seq_num
-            # Send SYN-ACK
-            print("Sending SYN_ACK")
-            send_syn_ack(conn, recv_packet, sender)
-        else:
-            continue
-
-        packet_type = -1
-        correct_seq = False
-
-        try:
-            while packet_type != Packet.ACK or not correct_seq:
-                # Receive ACK
-                response, sender = conn.recvfrom(1024)
-                recv_packet = Packet.from_bytes(response)
-                packet_type = recv_packet.packet_type
-                correct_seq = check_ack_seq(recv_packet.seq_num)
-                if packet_type == Packet.SYN:
-                    raise syn_error
-        except SynError:
-            continue
-
-        print("Received ACK\n3-Way Connection Handshake Finished")
-        increase_expected_frame()
-        increase_frame()
+def run_server(port, directory):
+    conn = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        conn.bind(('', port))
+        print('Server listening on port', port)
         while True:
-            print("Waiting for data")
+            data, sender = conn.recvfrom(1024)
+            recv_packet = Packet.from_bytes(data)
+            if recv_packet.packet_type == Packet.SYN:
+                threading.Thread(target=handle_client, args=(directory, data, sender)).start()
+    finally:
+        print("false")
+        conn.close()
+
+
+def handle_client(directory, data, sender):
+    conn = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    print('New client from', str(sender[0]) + ":" + str(sender[1]))
+
+    # Receive SYN
+    recv_packet = Packet.from_bytes(data)
+
+    if recv_packet.packet_type == Packet.SYN:
+        print("Received SYN")
+        client_seq_number = recv_packet.seq_num
+        # Send SYN-ACK
+        print("Sending SYN_ACK")
+        seq_number = send_syn_ack(conn, recv_packet, sender)
+    else:
+        return
+
+    packet_type = -1
+    correct_seq = False
+
+    try:
+        while packet_type != Packet.ACK or not correct_seq:
+            # Receive ACK
             response, sender = conn.recvfrom(1024)
             recv_packet = Packet.from_bytes(response)
             packet_type = recv_packet.packet_type
-            correct_seq = check_client_seq(recv_packet.seq_num)
-            correct_fin_seq = check_client_seq(recv_packet.seq_num - 1)
-            if packet_type == Packet.DATA and (correct_seq or correct_fin_seq):
-                if recv_packet.payload.decode("utf-8") == 'FIN' and correct_fin_seq:
-                    print('Done receiving data, Received FIN')
-                    increase_expected_frame()
-                    increase_expected_frame()
-                    break
-                elif correct_seq:
-                    response_string = build_response(recv_packet, directory)
-                    send_data(conn, response_string, recv_packet, sender)
-        conn.settimeout(1)
-        increase_frame()
-        while True:
-            print('Sending FIN ACK and FIN')
-            try:
-                send_ack(conn, recv_packet, sender)
-                send_fin(conn, recv_packet, sender)
-                response, sender = conn.recvfrom(1024)
-                recv_packet = Packet.from_bytes(response)
-                packet_type = recv_packet.packet_type
-                correct_seq = check_ack_seq(recv_packet.seq_num)
-                if packet_type == Packet.ACK and correct_seq:
-                    conn.settimeout(None)
-                    break
-            except socket.timeout:
-                continue
-        print('Received ACK, Client Done')
+            correct_seq = check_ack_seq(recv_packet.seq_num, seq_number)
+            if packet_type == Packet.SYN:
+                raise syn_error
+    except SynError:
+        return
+
+    print("Received ACK\n3-Way Connection Handshake Finished")
+    client_seq_number = increase_expected_frame(client_seq_number)
+    seq_number = increase_frame(seq_number)
+    while True:
+        print("Waiting for data")
+        response, sender = conn.recvfrom(1024)
+        recv_packet = Packet.from_bytes(response)
+        packet_type = recv_packet.packet_type
+        correct_seq = check_client_seq(recv_packet.seq_num, client_seq_number)
+        correct_fin_seq = check_client_seq(recv_packet.seq_num - 1, client_seq_number)
+        if packet_type == Packet.DATA and (correct_seq or correct_fin_seq):
+            if recv_packet.payload.decode("utf-8") == 'FIN' and correct_fin_seq:
+                print('Done receiving data, Received FIN')
+                client_seq_number = increase_expected_frame(client_seq_number)
+                client_seq_number = increase_expected_frame(client_seq_number)
+                break
+            elif correct_seq:
+                response_string = build_response(recv_packet, directory)
+                send_data(conn, response_string, recv_packet, sender, seq_number)
+    conn.settimeout(1)
+    seq_number = increase_frame(seq_number)
+    while True:
+        print('Sending FIN ACK and FIN')
+        try:
+            send_ack(conn, recv_packet, sender, client_seq_number)
+            send_fin(conn, recv_packet, sender, seq_number)
+            response, sender = conn.recvfrom(1024)
+            recv_packet = Packet.from_bytes(response)
+            packet_type = recv_packet.packet_type
+            correct_seq = check_ack_seq(recv_packet.seq_num, seq_number)
+            if packet_type == Packet.ACK and correct_seq:
+                conn.settimeout(None)
+                break
+        except socket.timeout:
+            continue
+    print('Received ACK, Client Done')
+    return
 
 
 def build_http_get(path, directory):

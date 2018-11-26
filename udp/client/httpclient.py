@@ -96,12 +96,12 @@ def send_fin(conn, recv_packet, router_host, router_port):
     conn.sendto(packet.to_bytes(), (router_host, router_port))
 
 
-def send_data(conn, request, router_host, router_port, ip, port):
+def send_data(conn, recv_packet, request, router_host, router_port):
     global seq_number
     packet = Packet(packet_type=Packet.DATA,
                     seq_num=seq_number,
-                    peer_ip_addr=ip,
-                    peer_port=port,
+                    peer_ip_addr=recv_packet.peer_ip_addr,
+                    peer_port=recv_packet.peer_port,
                     payload=request)
     conn.sendto(packet.to_bytes(), (router_host, router_port))
 
@@ -190,7 +190,7 @@ def http_request(request_type, url, router_host, router_port, headers=None, data
 
         # Send the data
         increase_frame()
-        send_data(conn, request, router_host, router_port, ip, port)
+        send_data(conn, recv_packet, request, router_host, router_port)
 
         packet_type = -1
         correct_seq = False
@@ -211,7 +211,7 @@ def http_request(request_type, url, router_host, router_port, headers=None, data
                     body = ""
             except socket.timeout:
                 send_ack(conn, recv_packet, router_host, router_port)
-                send_data(conn, request, router_host, router_port, ip, port)
+                send_data(conn, recv_packet, request, router_host, router_port)
         print('Received response, 3-Way Termination Handshake Started')
         increase_frame()
         while True:
